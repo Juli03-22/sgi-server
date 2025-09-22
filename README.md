@@ -154,7 +154,7 @@ Jorge Enrique Vargas Pech
 
 TSU in Data Science — Universidad Politécnica de Yucatán
 
-San Francisco de Campeche & Mérida, México — September 2025
+Mérida, México — September 2025
 
 ---
 
