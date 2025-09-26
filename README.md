@@ -1,6 +1,6 @@
 ﻿# Secure Identity Management System (SGI)
 
-A robust, auditable, and CLI‑first system for user management, secure authentication, and personal data integrity — designed for academic and professional cybersecurity projects.
+A robust, auditable, and CLI‑first system for user management, secure authentication, and personal data integrity. Designed for academic and professional cybersecurity projects.
 
 ---
 
