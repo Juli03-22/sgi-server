@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  sgi-server:
+    build: .
+    container_name: sgi-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./database:/app/database
+      - ./logs:/app/logs
+    environment:
+      - FLASK_ENV=production
+      - SECRET_KEY=your_super_secret_key_change_this_in_production
+      - DB_PATH=/app/database/db.sqlite3
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - sgi-network
+
+networks:
+  sgi-network:
+    driver: bridge
+
+volumes:
+  sgi-data:
+    driver: local

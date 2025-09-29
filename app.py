@@ -966,4 +966,10 @@ def webauthn_login_complete():
         return jsonify({'error': 'Authentication failed'}), 400
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    import os
+    # Get environment variables for Docker deployment
+    debug_mode = os.getenv('FLASK_ENV', 'production') != 'production'
+    host = os.getenv('FLASK_HOST', '0.0.0.0')
+    port = int(os.getenv('FLASK_PORT', 5000))
+    
+    app.run(host=host, port=port, debug=debug_mode)
