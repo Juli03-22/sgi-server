@@ -34,8 +34,9 @@
                         {% if not u['approved'] %}
                         <a href="{{ url_for('admin_approve_user', user_id=u['id']) }}" class="text-green-600 hover:text-green-900">{{ get_text('approve') }}</a>
                         {% endif %}
-                        <a href="{{ url_for('admin_delete_user', user_id=u['id']) }}" class="text-red-600 hover:text-red-900">{{ get_text('delete') }}</a>
+                        <a href="{{ url_for('delete_user', user_id=u['id']) }}" class="text-red-600 hover:text-red-900">{{ get_text('delete') }}</a>
                         <a href="{{ url_for('admin_reset_password', user_id=u['id']) }}" class="text-blue-600 hover:text-blue-900">{{ get_text('reset_password') }}</a>
+                        <a href="{{ url_for('change_user_role', user_id=u['id']) }}" class="text-purple-600 hover:text-purple-900">{{ get_text('change_role') }}</a>
                     </td>
                 </tr>
                 {% endfor %}

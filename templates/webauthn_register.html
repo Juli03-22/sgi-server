@@ -11,38 +11,40 @@
     </div>
 </div>
 <script>
-document.getElementById('register-btn').onclick = async function() {
-    document.getElementById('status').innerText = 'Conectando con tu llave física...';
-    // Iniciar registro
-    let resp = await fetch('/webauthn/register/begin', {method: 'POST'});
-    let options = await resp.json();
-    
-    // Convertir arrays de números a Uint8Array
-    options.challenge = new Uint8Array(options.challenge);
-    options.user.id = new Uint8Array(options.user.id);
-    
-    let cred;
+function arrToUint8(arr){ return new Uint8Array(arr); }
+document.getElementById('register-btn').onclick = async () => {
+    const status = document.getElementById('status');
+    status.innerText = 'Conectando con tu llave física...';
     try {
-        cred = await navigator.credentials.create({publicKey: options});
-    } catch (e) {
-        document.getElementById('status').innerText = 'Error: ' + e;
-        return;
-    }
-    // Completar registro - enviar como JSON
-    let data = {
-        clientDataJSON: Array.from(new Uint8Array(cred.response.clientDataJSON)),
-        attestationObject: Array.from(new Uint8Array(cred.response.attestationObject)),
-        transports: cred.response.getTransports ? cred.response.getTransports() : []
-    };
-    let complete = await fetch('/webauthn/register/complete', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    });
-    if (complete.ok) {
-        document.getElementById('status').innerText = '¡Llave registrada con éxito!';
-    } else {
-        document.getElementById('status').innerText = 'Error al registrar la llave.';
+        const resp = await fetch('/webauthn/register/begin',{method:'POST'});
+        if(!resp.ok){ status.innerText = 'Error iniciando registro'; return; }
+        const opts = await resp.json();
+        // Adaptar campos
+        opts.challenge = arrToUint8(opts.challenge);
+        opts.user.id = arrToUint8(opts.user.id);
+        if (opts.excludeCredentials){
+            opts.excludeCredentials = opts.excludeCredentials.map(c => ({...c, id: arrToUint8(c.id)}));
+        }
+        const cred = await navigator.credentials.create({ publicKey: opts });
+        const payload = {
+            clientDataJSON: Array.from(new Uint8Array(cred.response.clientDataJSON)),
+            attestationObject: Array.from(new Uint8Array(cred.response.attestationObject)),
+            // Optional transports (navigator support dependent)
+            transports: cred.response.getTransports ? cred.response.getTransports() : []
+        };
+        const finish = await fetch('/webauthn/register/complete',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if (finish.ok){
+            status.innerText = '¡Llave registrada con éxito!';
+        } else {
+            const err = await finish.json().catch(()=>({error:'Error desconocido'}));
+            status.innerText = 'Error al registrar: ' + err.error;
+        }
+    } catch(e){
+        status.innerText = 'Error: ' + e;
     }
 };
 </script>

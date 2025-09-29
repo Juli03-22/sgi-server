@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><title>{{ get_text('change_role') }}</title></head><body>
+<h2>{{ get_text('change_role') }}: {{ target_user['username'] }}</h2>
+<form method="POST">
+  <label>{{ get_text('new_role') }}:
+    <select name="new_role_id">
+      {% for r in roles %}
+        <option value="{{ r['id'] }}" {% if r['id'] == target_user['role_id'] %}selected{% endif %}>{{ r['name'] }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <br>
+  {% if admin_has_mfa %}
+    <label>{{ get_text('admin_mfa_code') }}: <input type="text" name="mfa_code" maxlength="6" pattern="[0-9]{6}" required></label>
+  {% else %}
+    <p style="color:red">{{ get_text('mfa_required_role_change') }}</p>
+  {% endif %}
+  <br>
+  <button type="submit" {% if not admin_has_mfa %}disabled{% endif %}>{{ get_text('change_role') }}</button>
+</form>
+<p><a href="{{ url_for('admin_users') }}">Volver</a></p>
+</body></html>

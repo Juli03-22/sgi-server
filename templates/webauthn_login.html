@@ -11,48 +11,41 @@
     </div>
 </div>
 <script>
-async function bufferDecode(value) {
-    return Uint8Array.from(atob(value), c => c.charCodeAt(0));
-}
-function bufferEncode(value) {
-    return btoa(String.fromCharCode.apply(null, new Uint8Array(value)));
-}
-document.getElementById('login-btn').onclick = async function() {
-    document.getElementById('status').innerText = 'Conectando con tu llave física...';
-    // Iniciar autenticación
-    let resp = await fetch('/webauthn/auth/begin', {method: 'POST'});
-    let options = await resp.arrayBuffer();
-    options = CBOR.decode(options);
-    options.challenge = new Uint8Array(options.challenge);
-    if (options.allowCredentials) {
-        options.allowCredentials = options.allowCredentials.map(c => ({...c, id: new Uint8Array(c.id)}));
-    }
-    let assertion;
+function arrToUint8(arr){ return new Uint8Array(arr); }
+document.getElementById('login-btn').onclick = async () => {
+    const status = document.getElementById('status');
+    status.innerText = 'Conectando con tu llave física...';
     try {
-        assertion = await navigator.credentials.get({publicKey: options});
-    } catch (e) {
-        document.getElementById('status').innerText = 'Error: ' + e;
-        return;
-    }
-    // Completar autenticación
-    let data = {
-        credentialId: new Uint8Array(assertion.rawId),
-        clientDataJSON: new Uint8Array(assertion.response.clientDataJSON),
-        authenticatorData: new Uint8Array(assertion.response.authenticatorData),
-        signature: new Uint8Array(assertion.response.signature),
-        userHandle: assertion.response.userHandle ? new Uint8Array(assertion.response.userHandle) : null
-    };
-    let complete = await fetch('/webauthn/auth/complete', {
-        method: 'POST',
-        body: CBOR.encode(data)
-    });
-    if (complete.ok) {
-        document.getElementById('status').innerText = '¡Autenticación exitosa! Redirigiendo...';
-        setTimeout(() => window.location = '/dashboard', 1000);
-    } else {
-        document.getElementById('status').innerText = 'Error al autenticar con la llave.';
+        const resp = await fetch('/webauthn/login/begin', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+        if(!resp.ok){ status.innerText='Error iniciando autenticación'; return; }
+        const opts = await resp.json();
+        opts.challenge = arrToUint8(opts.challenge);
+        if (opts.allowCredentials){
+            opts.allowCredentials = opts.allowCredentials.map(c => ({...c, id: arrToUint8(c.id)}));
+        }
+        const assertion = await navigator.credentials.get({ publicKey: opts });
+        const payload = {
+            id: Array.from(new Uint8Array(assertion.rawId)),
+            clientDataJSON: Array.from(new Uint8Array(assertion.response.clientDataJSON)),
+            authenticatorData: Array.from(new Uint8Array(assertion.response.authenticatorData)),
+            signature: Array.from(new Uint8Array(assertion.response.signature)),
+            userHandle: assertion.response.userHandle ? Array.from(new Uint8Array(assertion.response.userHandle)) : null
+        };
+        const finish = await fetch('/webauthn/login/complete', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if (finish.ok){
+            status.innerText = '¡Autenticación exitosa! Redirigiendo...';
+            setTimeout(()=>window.location='/dashboard', 800);
+        } else {
+            const err = await finish.json().catch(()=>({error:'Error desconocido'}));
+            status.innerText = 'Error: ' + err.error;
+        }
+    } catch(e){
+        status.innerText = 'Error: ' + e;
     }
 };
 </script>
-<script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.js"></script>
 {% endblock %}

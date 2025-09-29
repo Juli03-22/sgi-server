@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><title>Admin</title></head><body>
+<h1>{{ get_text('admin_panel') }}</h1>
+<p>{{ get_text('current_user') }} {{ current_user['username'] }} ({{ get_text('role') }}: {{ current_role }})</p>
+<table border="1" cellpadding="4">
+<tr><th>{{ get_text('username') }}</th><th>{{ get_text('role') }}</th><th>{{ get_text('status') }}</th><th>{{ get_text('actions') }}</th></tr>
+{% for u in users %}
+<tr>
+<td>{{ u['username'] }}</td>
+<td>{{ roles[u['role_id']] }}</td>
+<td>{{ get_text('approved') if u['approved'] else get_text('pending') }}</td>
+<td>
+    {% if not u['approved'] %}<a href="{{ url_for('admin_approve_user', user_id=u['id']) }}">{{ get_text('approve') }}</a>{% endif %}
+    | <a href="{{ url_for('delete_user', user_id=u['id']) }}">{{ get_text('delete') }}</a>
+    | <a href="{{ url_for('admin_reset_password', user_id=u['id']) }}">{{ get_text('reset_password') }}</a>
+    | <a href="{{ url_for('change_user_role', user_id=u['id']) }}">{{ get_text('change_role') }}</a>
+</td>
+</tr>
+{% endfor %}
+</table>
+</body></html>

@@ -15,12 +15,36 @@ from functools import wraps
 app = Flask(__name__)
 app.secret_key = 'tu_clave_secreta'
 
+# Helper seguro para acceso a sqlite3.Row
+def safe_row_value(row, key, default=None):
+    try:
+        if row is None:
+            return default
+        return row[key]
+    except Exception:
+        return default
+
 
 def get_db_connection():
     DB_PATH = r'C:\Users\Messy\OneDrive\Documentos\GitHub\sgi-server\web-app\src\database\db.sqlite3'
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+# Asegurar columnas nuevas (idempotente)
+def ensure_schema():
+    conn = get_db_connection()
+    try:
+        conn.execute('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0')
+    except Exception:
+        pass
+    try:
+        conn.execute('ALTER TABLE users ADD COLUMN session_version INTEGER DEFAULT 0')
+    except Exception:
+        pass
+    conn.commit(); conn.close()
+
+ensure_schema()
 
 # Función para cifrar (hash) los logs de auditoría
 SECRET_LOG_KEY = 'clave_secreta_audit'  # Cambia esto por una clave segura
@@ -56,15 +80,34 @@ texts = {
         'welcome_user': 'Bienvenido, usuario normal',
         'welcome_admin': 'Bienvenido, administrador',
         'welcome_root': 'Bienvenido, root',
-    'logout': 'Cerrar sesión',
-    'password_requirements': 'La contraseña debe tener al menos 16 caracteres, mayúsculas, minúsculas, números y símbolos.',
-    'suggest_password': 'Sugerir contraseña',
-    'copy': 'Copiar',
-    '2fa_title': 'Autenticación de dos factores',
-    '2fa_instruction': 'Escanea el código QR con tu app de autenticación o ingresa el código de seguridad:',
-    '2fa_code': 'Código de seguridad',
-    '2fa_submit': 'Verificar',
-    '2fa_error': 'Código incorrecto. Intenta de nuevo.'
+        'logout': 'Cerrar sesión',
+        'password_requirements': 'La contraseña debe tener al menos 16 caracteres, mayúsculas, minúsculas, números y símbolos.',
+        'suggest_password': 'Sugerir contraseña',
+        'copy': 'Copiar',
+        '2fa_title': 'Autenticación de dos factores',
+        '2fa_instruction': 'Escanea el código QR con tu app de autenticación o ingresa el código de seguridad:',
+        '2fa_code': 'Código de seguridad',
+        '2fa_submit': 'Verificar',
+        '2fa_error': 'Código incorrecto. Intenta de nuevo.',
+        'admin_panel': 'Panel de Administración',
+        'current_user': 'Usuario actual:',
+        'role': 'rol',
+        'status': 'Estado',
+        'actions': 'Acciones',
+        'approved': 'Aprobado',
+        'pending': 'Pendiente',
+        'approve': 'Aprobar',
+        'delete': 'Eliminar',
+        'reset_password': 'Resetear contraseña',
+        'change_role': 'Cambiar rol',
+        'new_role': 'Nuevo rol',
+        'admin_mfa_code': 'Código MFA (admin/root)',
+        'role_changed': 'Rol actualizado correctamente',
+        'mfa_required_role_change': 'Debes habilitar 2FA para cambiar roles',
+        'mfa_invalid': 'Código MFA inválido',
+        'cannot_change_own_role': 'No puedes cambiar tu propio rol',
+        'cannot_change_root_without_root': 'Solo un usuario root puede cambiar el rol de otro root',
+        'cannot_remove_last_root': 'No puedes eliminar el último usuario con rol root'
     },
     'en': {
         'login': 'Login',
@@ -80,15 +123,34 @@ texts = {
         'welcome_user': 'Welcome, regular user',
         'welcome_admin': 'Welcome, admin',
         'welcome_root': 'Welcome, root',
-    'logout': 'Logout',
-    'password_requirements': 'Password must be at least 16 characters, with uppercase, lowercase, numbers, and symbols.',
-    'suggest_password': 'Suggest password',
-    'copy': 'Copy',
-    '2fa_title': 'Two-Factor Authentication',
-    '2fa_instruction': 'Scan the QR code with your authenticator app or enter the security code:',
-    '2fa_code': 'Security code',
-    '2fa_submit': 'Verify',
-    '2fa_error': 'Incorrect code. Try again.'
+        'logout': 'Logout',
+        'password_requirements': 'Password must be at least 16 characters, with uppercase, lowercase, numbers, and symbols.',
+        'suggest_password': 'Suggest password',
+        'copy': 'Copy',
+        '2fa_title': 'Two-Factor Authentication',
+        '2fa_instruction': 'Scan the QR code with your authenticator app or enter the security code:',
+        '2fa_code': 'Security code',
+        '2fa_submit': 'Verify',
+        '2fa_error': 'Incorrect code. Try again.',
+        'admin_panel': 'Admin Panel',
+        'current_user': 'Current user:',
+        'role': 'role',
+        'status': 'Status',
+        'actions': 'Actions',
+        'approved': 'Approved',
+        'pending': 'Pending',
+        'approve': 'Approve',
+        'delete': 'Delete',
+        'reset_password': 'Reset password',
+        'change_role': 'Change role',
+        'new_role': 'New role',
+        'admin_mfa_code': 'MFA code (admin/root)',
+        'role_changed': 'Role updated successfully',
+        'mfa_required_role_change': 'You must enable 2FA to change roles',
+        'mfa_invalid': 'Invalid MFA code',
+        'cannot_change_own_role': 'You cannot change your own role',
+        'cannot_change_root_without_root': 'Only a root user can change the role of another root',
+        'cannot_remove_last_root': 'You cannot remove the last root user'
     }
 }
 
@@ -146,7 +208,16 @@ def login():
         if user and check_password(password, user['password_hash']):
             if not user['approved']:
                 return redirect(url_for('pending'))
-            elif user['otp_secret']:
+            # Bypass MFA para admin/root (solo contraseña)
+            if role_name in ('admin', 'root'):
+                session['user_id'] = user['id']
+                session['role'] = role_name
+                session['session_version'] = safe_row_value(user, 'session_version', 0)
+                if safe_row_value(user, 'must_change_password', 0):
+                    return redirect(url_for('force_change_password'))
+                return redirect('/admin/dashboard')
+            # Usuarios estándar: si tienen 2FA configurado, verificar; si no, acceso directo
+            if user['otp_secret']:
                 totp = pyotp.TOTP(user['otp_secret'])
                 if not code:
                     show_2fa = True
@@ -154,14 +225,19 @@ def login():
                 elif totp.verify(code):
                     session['user_id'] = user['id']
                     session['role'] = role_name
+                    session['session_version'] = safe_row_value(user, 'session_version', 0)
+                    if safe_row_value(user, 'must_change_password', 0):
+                        return redirect(url_for('force_change_password'))
                     return redirect('/dashboard')
                 else:
-                    if role_name in ADMIN_ROLES:
-                        msg = 'MFA obligatorio para cuentas privilegiadas. Acceso denegado.'
-                    else:
-                        msg = get_text('2fa_error')
+                    msg = get_text('2fa_error')
             else:
-                msg = 'Usuario sin 2FA. Contacte al administrador.'
+                session['user_id'] = user['id']
+                session['role'] = role_name
+                session['session_version'] = safe_row_value(user, 'session_version', 0)
+                if safe_row_value(user, 'must_change_password', 0):
+                    return redirect(url_for('force_change_password'))
+                return redirect('/dashboard')
         else:
             msg = get_text('incorrect')
     return render_template('login.html', show_2fa=show_2fa, msg=msg)
@@ -348,6 +424,8 @@ def logout():
 
 # Helper para verificar si el usuario es admin o superior
 ADMIN_ROLES = [
+    'root',
+    'admin',
     'Chief Executive Officer (CEO)',
     'Chief Operating Officer (COO)',
     'General Director',
@@ -370,6 +448,17 @@ def require_login(f):
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
             return redirect(url_for('login'))
+        # Validar invalidación de sesión
+        try:
+            conn = get_db_connection()
+            row = conn.execute('SELECT session_version FROM users WHERE id=?', (session['user_id'],)).fetchone()
+            conn.close()
+            if row and session.get('session_version') is not None and row['session_version'] != session.get('session_version'):
+                session.clear()
+                flash('Sesión invalidada. Inicia sesión nuevamente.', 'warning')
+                return redirect(url_for('login'))
+        except Exception:
+            pass
         return f(*args, **kwargs)
     return decorated
 
@@ -402,6 +491,102 @@ def admin_approve_user(user_id):
         log_audit(admin['id'], 'Aprobación usuario', user['username'])
     conn.close()
     return redirect(url_for('admin_users'))
+
+@app.route('/admin/users')
+@require_admin
+def admin_users():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    conn = get_db_connection()
+    user = conn.execute('SELECT * FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+    role = conn.execute('SELECT name FROM roles WHERE id = ?', (user['role_id'],)).fetchone()
+    users = conn.execute('SELECT * FROM users').fetchall()
+    roles = {r['id']: r['name'] for r in conn.execute('SELECT * FROM roles').fetchall()}
+    conn.close()
+    return render_template('admin_dashboard_simple.html', users=users, roles=roles, current_user=user, current_role=role['name'], get_text=get_text)
+
+@app.route('/admin/dashboard')
+@require_admin
+def admin_dashboard():
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/reset_password/<int:user_id>')
+@require_admin
+def admin_reset_password(user_id):
+    conn = get_db_connection()
+    user = conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        flash('Usuario no encontrado', 'danger')
+        return redirect(url_for('admin_users'))
+    temp_pass = generar_password_segura(20)
+    hashed = hash_password(temp_pass)
+    conn.execute('UPDATE users SET password_hash=?, must_change_password=1, session_version = COALESCE(session_version,0)+1 WHERE id=?', (hashed, user_id))
+    conn.commit()
+    conn.close()
+    flash(f'Password reseteado. Nueva contraseña temporal: {temp_pass}', 'success')
+    log_audit(session['user_id'], 'Reset password', user['username'])
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/change_role/<int:user_id>', methods=['GET', 'POST'])
+@require_admin
+def change_user_role(user_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    conn = get_db_connection()
+    admin_user = conn.execute('SELECT * FROM users WHERE id=?', (session['user_id'],)).fetchone()
+    target_user = conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+    roles = conn.execute('SELECT * FROM roles ORDER BY name').fetchall()
+    def role_name_from_id(rid):
+        row = conn.execute('SELECT name FROM roles WHERE id=?', (rid,)).fetchone()
+        return row['name'] if row else ''
+    if not target_user:
+        conn.close()
+        flash('Usuario no encontrado', 'danger')
+        return redirect(url_for('admin_users'))
+    admin_role_name = role_name_from_id(admin_user['role_id'])
+    target_role_name = role_name_from_id(target_user['role_id'])
+    if target_user['id'] == admin_user['id'] and request.method == 'POST':
+        conn.close()
+        flash(get_text('cannot_change_own_role'), 'danger')
+        return redirect(url_for('admin_users'))
+    if target_role_name == 'root' and admin_role_name != 'root':
+        conn.close()
+        flash(get_text('cannot_change_root_without_root'), 'danger')
+        return redirect(url_for('admin_users'))
+    if request.method == 'POST':
+        new_role_id = request.form.get('new_role_id')
+        mfa_code = request.form.get('mfa_code')
+        if not admin_user['otp_secret']:
+            conn.close()
+            flash(get_text('mfa_required_role_change'), 'danger')
+            return redirect(url_for('admin_users'))
+        totp = pyotp.TOTP(admin_user['otp_secret'])
+        if not mfa_code or not totp.verify(mfa_code, valid_window=1):
+            conn.close()
+            flash(get_text('mfa_invalid'), 'danger')
+            return redirect(url_for('change_user_role', user_id=user_id))
+        role_exists = conn.execute('SELECT id, name FROM roles WHERE id=?', (new_role_id,)).fetchone()
+        if not role_exists:
+            conn.close()
+            flash('Rol inválido', 'danger')
+            return redirect(url_for('change_user_role', user_id=user_id))
+        new_role_name = role_exists['name']
+        if target_role_name == 'root' and new_role_name != 'root':
+            root_count = conn.execute('SELECT COUNT(*) as c FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = "root"').fetchone()['c']
+            if root_count <= 1:
+                conn.close()
+                flash(get_text('cannot_remove_last_root'), 'danger')
+                return redirect(url_for('admin_users'))
+        conn.execute('UPDATE users SET role_id=?, session_version = COALESCE(session_version,0)+1 WHERE id=?', (new_role_id, user_id))
+        conn.commit()
+        log_audit(admin_user['id'], 'Cambio rol', f"{target_user['username']}: {target_role_name} -> {new_role_name}")
+        conn.close()
+        flash(get_text('role_changed'), 'success')
+        return redirect(url_for('admin_users'))
+    admin_has_mfa = bool(admin_user['otp_secret'])
+    conn.close()
+    return render_template('admin_change_role.html', target_user=target_user, roles=roles, target_role_name=target_role_name, admin_has_mfa=admin_has_mfa, get_text=get_text)
 
 @app.route('/admin/users/block/<int:user_id>')
 @require_admin
@@ -466,11 +651,36 @@ def change_password():
         conn.close()
         return redirect(url_for('profile'))
     hashed = hash_password(new)
-    conn.execute('UPDATE users SET password_hash=? WHERE id=?', (hashed, user['id']))
+    conn.execute('UPDATE users SET password_hash=?, must_change_password=0, session_version = COALESCE(session_version,0)+1 WHERE id=?', (hashed, user['id']))
     conn.commit()
     conn.close()
     flash('Contraseña cambiada', 'success')
     return redirect(url_for('profile'))
+
+@app.route('/force_change_password', methods=['GET','POST'])
+def force_change_password():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    conn = get_db_connection()
+    user = conn.execute('SELECT * FROM users WHERE id=?', (session['user_id'],)).fetchone()
+    conn.close()
+    if not user or not safe_row_value(user, 'must_change_password', 0):
+        return redirect(url_for('dashboard'))
+    msg = ''
+    if request.method == 'POST':
+        old = request.form.get('old_password')
+        new = request.form.get('new_password')
+        if not check_password(old, user['password_hash']):
+            msg = 'Contraseña temporal incorrecta'
+        elif (len(new) < 16 or not any(c.islower() for c in new) or not any(c.isupper() for c in new) or not any(c.isdigit() for c in new) or not any(c in string.punctuation for c in new)):
+            msg = 'La nueva contraseña no cumple requisitos'
+        else:
+            c2 = get_db_connection()
+            c2.execute('UPDATE users SET password_hash=?, must_change_password=0, session_version = COALESCE(session_version,0)+1 WHERE id=?', (hash_password(new), user['id']))
+            c2.commit(); c2.close()
+            flash('Contraseña actualizada. Continúa.', 'success')
+            return redirect(url_for('dashboard'))
+    return render_template('force_change_password.html', msg=msg)
 
 @app.route('/profile/toggle_2fa', methods=['POST'])
 def toggle_2fa():

@@ -3,7 +3,14 @@
 import pyotp
 import json
 from fido2.server import Fido2Server
-from fido2.webauthn import PublicKeyCredentialRpEntity
+from fido2.webauthn import (
+    PublicKeyCredentialRpEntity,
+    PublicKeyCredentialUserEntity,
+    PublicKeyCredentialDescriptor,
+    AttestationObject,
+    CollectedClientData,
+    AuthenticatorData,
+)
 from fido2.utils import websafe_encode, websafe_decode
 import cbor2 as cbor
 from flask import make_response
@@ -39,6 +46,30 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+# Helper seguro para filas sqlite3.Row
+def safe_row_value(row, key, default=None):
+    try:
+        if row is None:
+            return default
+        return row[key]
+    except Exception:
+        return default
+
+# --- Seguridad: asegurar columnas nuevas (idempotente) ---
+def ensure_schema():
+    conn = get_db_connection()
+    try:
+        conn.execute('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0')
+    except Exception:
+        pass
+    try:
+        conn.execute('ALTER TABLE users ADD COLUMN session_version INTEGER DEFAULT 0')
+    except Exception:
+        pass
+    conn.commit(); conn.close()
+
+ensure_schema()
+
 # Inicializar tabla WebAuthn si no existe
 def init_webauthn_table():
     conn = get_db_connection()
@@ -72,6 +103,12 @@ def encrypt_log(text):
 
 def log_audit(user_id, action, details=None):
     raw = f"{user_id}|{action}|{details if details else ''}"
+    try:
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        ua = request.headers.get('User-Agent', '-')
+        raw = raw + f"|IP={ip}|UA={ua[:120]}"
+    except Exception:
+        pass
     encrypted = encrypt_log(raw)
     conn = get_db_connection()
     conn.execute('INSERT INTO audit_log (user_id, action) VALUES (?, ?)', (user_id, encrypted))
@@ -113,6 +150,15 @@ texts = {
         'approve': 'Aprobar',
         'delete': 'Eliminar',
         'reset_password': 'Resetear contraseña',
+        'change_role': 'Cambiar rol',
+        'new_role': 'Nuevo rol',
+        'admin_mfa_code': 'Código MFA (admin/root)',
+        'role_changed': 'Rol actualizado correctamente',
+        'mfa_required_role_change': 'Debes habilitar 2FA para cambiar roles',
+        'mfa_invalid': 'Código MFA inválido',
+        'cannot_change_own_role': 'No puedes cambiar tu propio rol',
+        'cannot_change_root_without_root': 'Solo un usuario root puede cambiar el rol de otro root',
+        'cannot_remove_last_root': 'No puedes eliminar el último usuario con rol root'
     },
     'en': {
         'login': 'Login',
@@ -147,6 +193,15 @@ texts = {
         'approve': 'Approve',
         'delete': 'Delete',
         'reset_password': 'Reset password',
+        'change_role': 'Change role',
+        'new_role': 'New role',
+        'admin_mfa_code': 'MFA code (admin/root)',
+        'role_changed': 'Role updated successfully',
+        'mfa_required_role_change': 'You must enable 2FA to change roles',
+        'mfa_invalid': 'Invalid MFA code',
+        'cannot_change_own_role': 'You cannot change your own role',
+        'cannot_change_root_without_root': 'Only a root user can change the role of another root',
+        'cannot_remove_last_root': 'You cannot remove the last root user'
     }
 }
 
@@ -203,7 +258,16 @@ def login():
         if user and check_password(password, user['password_hash']):
             if not user['approved']:
                 return redirect(url_for('pending'))
-            elif user['otp_secret']:
+            # Bypass MFA para admin y root (solo contraseña suficiente)
+            if role_name in ('admin', 'root'):
+                session['user_id'] = user['id']
+                session['role'] = role_name
+                session['session_version'] = safe_row_value(user, 'session_version', 0)
+                if safe_row_value(user, 'must_change_password', 0):
+                    return redirect(url_for('force_change_password'))
+                return redirect('/admin/dashboard')
+            # Para usuarios normales, si tienen 2FA configurado, pedir/verificar
+            if user['otp_secret']:
                 totp = pyotp.TOTP(user['otp_secret'])
                 if not code:
                     show_2fa = True
@@ -211,16 +275,20 @@ def login():
                 elif totp.verify(code):
                     session['user_id'] = user['id']
                     session['role'] = role_name
-                    if role_name in ('admin', 'root'):
-                        return redirect('/admin/dashboard')
+                    session['session_version'] = safe_row_value(user, 'session_version', 0)
+                    if safe_row_value(user, 'must_change_password', 0):
+                        return redirect(url_for('force_change_password'))
                     return redirect('/dashboard')
                 else:
-                    if role_name in ADMIN_ROLES:
-                        msg = 'MFA obligatorio para cuentas privilegiadas. Acceso denegado.'
-                    else:
-                        msg = get_text('2fa_error')
+                    msg = get_text('2fa_error')
             else:
-                msg = 'Usuario sin 2FA. Contacte al administrador.'
+                # Acceso sin 2FA en usuarios estándar
+                session['user_id'] = user['id']
+                session['role'] = role_name
+                session['session_version'] = safe_row_value(user, 'session_version', 0)
+                if safe_row_value(user, 'must_change_password', 0):
+                    return redirect(url_for('force_change_password'))
+                return redirect('/dashboard')
         else:
             msg = get_text('incorrect')
     return render_template('login.html', show_2fa=show_2fa, msg=msg)
@@ -478,6 +546,17 @@ def require_login(f):
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
             return redirect(url_for('login'))
+        # Validar invalidación de sesión por cambios críticos
+        try:
+            conn = get_db_connection()
+            row = conn.execute('SELECT session_version FROM users WHERE id=?', (session['user_id'],)).fetchone()
+            conn.close()
+            if row and session.get('session_version') is not None and row['session_version'] != session.get('session_version'):
+                session.clear()
+                flash('Sesión invalidada. Inicia sesión nuevamente.', 'warning')
+                return redirect(url_for('login'))
+        except Exception:
+            pass
         return f(*args, **kwargs)
     return decorated
 
@@ -568,6 +647,92 @@ def delete_user(user_id):
     flash('Usuario eliminado', 'danger')
     return redirect(url_for('admin_users'))
 
+@app.route('/admin/users/reset_password/<int:user_id>')
+@require_admin
+def admin_reset_password(user_id):
+    conn = get_db_connection()
+    user = conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        flash('Usuario no encontrado', 'danger')
+        return redirect(url_for('admin_users'))
+    # Generar password temporal seguro
+    temp_pass = generar_password_segura(20)
+    hashed = hash_password(temp_pass)
+    conn.execute('UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?', (hashed, user_id))
+    conn.commit()
+    conn.close()
+    flash(f'Password reseteado. Nueva contraseña temporal: {temp_pass}', 'success')
+    log_audit(session['user_id'], 'Reset password', user['username'])
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/change_role/<int:user_id>', methods=['GET', 'POST'])
+@require_admin
+def change_user_role(user_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    conn = get_db_connection()
+    admin_user = conn.execute('SELECT * FROM users WHERE id=?', (session['user_id'],)).fetchone()
+    target_user = conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+    roles = conn.execute('SELECT * FROM roles ORDER BY name').fetchall()
+    # Obtener nombres de roles actuales
+    def role_name_from_id(rid):
+        row = conn.execute('SELECT name FROM roles WHERE id=?', (rid,)).fetchone()
+        return row['name'] if row else ''
+    if not target_user:
+        conn.close()
+        flash('Usuario no encontrado', 'danger')
+        return redirect(url_for('admin_users'))
+    admin_role_name = role_name_from_id(admin_user['role_id'])
+    target_role_name = role_name_from_id(target_user['role_id'])
+    # No permitir cambiar propio rol (por seguridad)
+    if target_user['id'] == admin_user['id'] and request.method == 'POST':
+        conn.close()
+        flash(get_text('cannot_change_own_role'), 'danger')
+        return redirect(url_for('admin_users'))
+    # Solo root puede cambiar rol de un root distinto
+    if target_role_name == 'root' and admin_role_name != 'root':
+        conn.close()
+        flash(get_text('cannot_change_root_without_root'), 'danger')
+        return redirect(url_for('admin_users'))
+    if request.method == 'POST':
+        new_role_id = request.form.get('new_role_id')
+        mfa_code = request.form.get('mfa_code')
+        # Verificar que admin tenga 2FA
+        if not admin_user['otp_secret']:
+            conn.close()
+            flash(get_text('mfa_required_role_change'), 'danger')
+            return redirect(url_for('admin_users'))
+        totp = pyotp.TOTP(admin_user['otp_secret'])
+        if not mfa_code or not totp.verify(mfa_code, valid_window=1):
+            conn.close()
+            flash(get_text('mfa_invalid'), 'danger')
+            return redirect(url_for('change_user_role', user_id=user_id))
+        # Validar rol objetivo existe
+        role_exists = conn.execute('SELECT id, name FROM roles WHERE id=?', (new_role_id,)).fetchone()
+        if not role_exists:
+            conn.close()
+            flash('Rol inválido', 'danger')
+            return redirect(url_for('change_user_role', user_id=user_id))
+        new_role_name = role_exists['name']
+        # Protección: evitar eliminar último root
+        if target_role_name == 'root' and new_role_name != 'root':
+            root_count = conn.execute('SELECT COUNT(*) as c FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = "root"').fetchone()['c']
+            if root_count <= 1:
+                conn.close()
+                flash(get_text('cannot_remove_last_root'), 'danger')
+                return redirect(url_for('admin_users'))
+        conn.execute('UPDATE users SET role_id=?, session_version = COALESCE(session_version,0)+1 WHERE id=?', (new_role_id, user_id))
+        conn.commit()
+        log_audit(admin_user['id'], 'Cambio rol', f"{target_user['username']}: {target_role_name} -> {new_role_name}")
+        conn.close()
+        flash(get_text('role_changed'), 'success')
+        return redirect(url_for('admin_users'))
+    # GET -> mostrar formulario
+    admin_has_mfa = bool(admin_user['otp_secret'])
+    conn.close()
+    return render_template('admin_change_role.html', target_user=target_user, roles=roles, target_role_name=target_role_name, admin_has_mfa=admin_has_mfa, get_text=get_text)
+
 @app.route('/admin/roles/edit/<int:role_id>', methods=['GET', 'POST'])
 @require_admin
 def edit_role(role_id):
@@ -611,11 +776,36 @@ def change_password():
         conn.close()
         return redirect(url_for('profile'))
     hashed = hash_password(new)
-    conn.execute('UPDATE users SET password_hash=? WHERE id=?', (hashed, user['id']))
+    conn.execute('UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?', (hashed, user['id']))
     conn.commit()
     conn.close()
     flash('Contraseña cambiada', 'success')
     return redirect(url_for('profile'))
+
+@app.route('/force_change_password', methods=['GET','POST'])
+def force_change_password():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    conn = get_db_connection()
+    user = conn.execute('SELECT * FROM users WHERE id=?', (session['user_id'],)).fetchone()
+    conn.close()
+    if not user or not user['must_change_password']:
+        return redirect(url_for('dashboard'))
+    msg = ''
+    if request.method == 'POST':
+        old = request.form.get('old_password')
+        new = request.form.get('new_password')
+        if not check_password(old, user['password_hash']):
+            msg = 'Contraseña temporal incorrecta'
+        elif (len(new) < 16 or not any(c.islower() for c in new) or not any(c.isupper() for c in new) or not any(c.isdigit() for c in new) or not any(c in string.punctuation for c in new)):
+            msg = 'La nueva contraseña no cumple requisitos'
+        else:
+            c2 = get_db_connection()
+            c2.execute('UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?', (hash_password(new), user['id']))
+            c2.commit(); c2.close()
+            flash('Contraseña actualizada. Continúa.', 'success')
+            return redirect(url_for('dashboard'))
+    return render_template('force_change_password.html', msg=msg)
 
 @app.route('/profile/toggle_2fa', methods=['POST'])
 def toggle_2fa():
@@ -752,52 +942,71 @@ def webauthn_register_begin():
         return jsonify({'error': 'User not found'}), 404
     
     # Obtener credenciales existentes del usuario para evitar duplicados
-    existing_credentials = []
-    creds = conn.execute('SELECT credential_id FROM webauthn_credentials WHERE user_id = ?', (user_id,)).fetchall()
-    for cred in creds:
-        existing_credentials.append({"type": "public-key", "id": websafe_decode(cred['credential_id'])})
-    
+    rows = conn.execute('SELECT credential_id FROM webauthn_credentials WHERE user_id = ?', (user_id,)).fetchall()
     conn.close()
-    
-    # Crear opciones de registro para WebAuthn
-    user_info = {
-        "id": str(user_id).encode(),
-        "name": user['username'],
-        "displayName": user['nombres'] if user['nombres'] else user['username'],
-    }
-    
+    existing = []
+    for r in rows:
+        try:
+            existing.append(
+                PublicKeyCredentialDescriptor(id=websafe_decode(r['credential_id']), type='public-key')
+            )
+        except Exception:
+            pass
+
+    # Construir entidad de usuario
+    user_entity = PublicKeyCredentialUserEntity(
+        id=str(user_id).encode('utf-8'),
+        name=user['username'],
+        display_name=user['nombres'] if user['nombres'] else user['username']
+    )
+
     try:
-        registration_data, state = fido2_server.register_begin(
-            user_info,
-            origins=ORIGINS
+        creation_options, state = fido2_server.register_begin(
+            user_entity,
+            credentials=existing,
+            user_verification='preferred'
         )
     except Exception as e:
         print(f"Error in register_begin: {e}")
         return jsonify({'error': 'WebAuthn registration failed'}), 500
-    
-    # Guardar el estado en la sesión
+
     session['webauthn_state'] = state
-    
-    # Enviar los datos como JSON en lugar de CBOR para simplificar
+
+    # Serializar opciones en formato similar al anterior (listas de ints)
+    def to_list(b: bytes):
+        return list(b) if isinstance(b, (bytes, bytearray)) else b
+
+    exclude_serialized = []
+    if creation_options.exclude_credentials:
+        for cred in creation_options.exclude_credentials:
+            exclude_serialized.append({
+                'type': cred.type,
+                'id': to_list(cred.id)
+            })
+
     registration_dict = {
-        "challenge": list(registration_data.public_key.challenge),
-        "rp": {"id": registration_data.public_key.rp.id, "name": registration_data.public_key.rp.name},
-        "user": {
-            "id": list(registration_data.public_key.user.id),
-            "name": registration_data.public_key.user.name,
-            "displayName": registration_data.public_key.user.display_name
+        'challenge': to_list(creation_options.challenge),
+        'rp': {
+            'id': creation_options.rp.id,
+            'name': creation_options.rp.name
         },
-        "pubKeyCredParams": [{"alg": param.alg, "type": param.type} for param in registration_data.public_key.pub_key_cred_params],
-        "timeout": registration_data.public_key.timeout if registration_data.public_key.timeout else 60000,
-        "attestation": registration_data.public_key.attestation.value if registration_data.public_key.attestation else "none",
-        "excludeCredentials": [],
-        "authenticatorSelection": {
-            "authenticatorAttachment": "cross-platform",
-            "userVerification": "preferred",
-            "requireResidentKey": False
+        'user': {
+            'id': to_list(creation_options.user.id),
+            'name': creation_options.user.name,
+            'displayName': creation_options.user.display_name
+        },
+        'pubKeyCredParams': [
+            {'type': p.type, 'alg': p.alg} for p in creation_options.pub_key_cred_params
+        ],
+        'timeout': creation_options.timeout or 60000,
+        'attestation': creation_options.attestation or 'none',
+        'excludeCredentials': exclude_serialized,
+        'authenticatorSelection': {
+            'authenticatorAttachment': 'cross-platform',
+            'userVerification': 'preferred',
+            'requireResidentKey': False
         }
     }
-    
     print(f"Sending registration data: {registration_dict}")
     return jsonify(registration_dict)
 
@@ -813,39 +1022,28 @@ def webauthn_register_complete():
     state = session.pop('webauthn_state')
     
     try:
-        # Decodificar los datos JSON del cliente
-        data = request.get_json()
-        
-        # Convertir arrays de números de vuelta a bytes
+        data = request.get_json(force=True)
+        # Cliente envía arrays de ints; convertir a bytes
         client_data = bytes(data['clientDataJSON'])
         attestation_object = bytes(data['attestationObject'])
-        
-        # Crear estructura para fido2
-        credential_data = type('obj', (object,), {
-            'client_data': client_data,
-            'attestation_object': attestation_object
-        })()
-        
-        # Verificar la credencial con fido2
-        auth_data = fido2_server.register_complete(state, credential_data)
-        
-        # Guardar la credencial en la base de datos
+
+        client_data_obj = CollectedClientData(client_data)
+        att_obj = AttestationObject(attestation_object)
+
+        auth_data = fido2_server.register_complete(state, client_data_obj, att_obj)
+
+        credential_id = websafe_encode(auth_data.credential_id)
+        public_key_cose = websafe_encode(auth_data.credential_public_key)
+        sign_count = auth_data.sign_count
+
         conn = get_db_connection()
-        
-        # Extraer información de la credencial
-        credential_id = websafe_encode(auth_data.credential_data.credential_id)
-        public_key = websafe_encode(cbor.dumps(auth_data.credential_data.public_key))
-        
-        conn.execute('''
-            INSERT INTO webauthn_credentials (user_id, credential_id, public_key, created_at) 
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ''', (user_id, credential_id, public_key))
-        
+        conn.execute(
+            'INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
+            (user_id, credential_id, public_key_cose, sign_count)
+        )
         conn.commit()
         conn.close()
-        
         return jsonify({'status': 'ok'})
-        
     except Exception as e:
         print(f"WebAuthn registration error: {e}")
         return jsonify({'error': 'Registration failed'}), 400
@@ -853,56 +1051,48 @@ def webauthn_register_complete():
 @app.route('/webauthn/login/begin', methods=['POST'])
 def webauthn_login_begin():
     try:
-        # Para el login, necesitamos obtener las credenciales disponibles
         conn = get_db_connection()
-        
-        # Si hay un usuario específico en el request, usarlo
         username = request.json.get('username') if request.is_json else None
-        
+        allow_list = []
+        target_user_id = None
         if username:
             user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
             if not user:
                 conn.close()
                 return jsonify({'error': 'User not found'}), 404
-            
-            # Obtener credenciales del usuario
-            creds = conn.execute(
-                'SELECT credential_id FROM webauthn_credentials WHERE user_id = ?',
-                (user['id'],)
-            ).fetchall()
-            
-            allow_credentials = [
-                {"type": "public-key", "id": websafe_decode(cred['credential_id'])}
-                for cred in creds
-            ]
-        else:
-            # Permitir cualquier credencial registrada
-            allow_credentials = []
-        
+            target_user_id = user['id']
+            rows = conn.execute('SELECT credential_id FROM webauthn_credentials WHERE user_id = ?', (user['id'],)).fetchall()
+            for r in rows:
+                try:
+                    allow_list.append(
+                        PublicKeyCredentialDescriptor(id=websafe_decode(r['credential_id']), type='public-key')
+                    )
+                except Exception:
+                    pass
         conn.close()
-        
-        # Crear opciones de autenticación
-        auth_data, state = fido2_server.authenticate_begin(allow_credentials)
-        
-        # Guardar el estado en la sesión
-        session['webauthn_auth_state'] = state
-        
-        # Convertir el objeto RequestOptions a dict para serializarlo
+
+        assertion_options, state = fido2_server.authenticate_begin(
+            credentials=allow_list,
+            user_verification='preferred'
+        )
+        session['webauthn_auth_state'] = {'state': state, 'user_id': target_user_id}
+
+        def to_list(b: bytes):
+            return list(b) if isinstance(b, (bytes, bytearray)) else b
+
+        allow_serialized = []
+        if assertion_options.allow_credentials:
+            for cred in assertion_options.allow_credentials:
+                allow_serialized.append({'type': cred.type, 'id': to_list(cred.id)})
+
         auth_dict = {
-            "publicKey": {
-                "challenge": list(auth_data.challenge),
-                "timeout": auth_data.timeout,
-                "rpId": auth_data.rp_id,
-                "allowCredentials": [
-                    {"id": list(cred.id), "type": cred.type} 
-                    for cred in (auth_data.allow_credentials or [])
-                ],
-                "userVerification": auth_data.user_verification.value if auth_data.user_verification else "preferred"
-            }
+            'challenge': to_list(assertion_options.challenge),
+            'timeout': assertion_options.timeout,
+            'rpId': assertion_options.rp_id,
+            'allowCredentials': allow_serialized,
+            'userVerification': assertion_options.user_verification or 'preferred'
         }
-        response = make_response(cbor.dumps(auth_dict))
-        response.headers['Content-Type'] = 'application/cbor'
-        return response
+        return jsonify(auth_dict)
         
     except Exception as e:
         print(f"WebAuthn login begin error: {e}")
@@ -912,55 +1102,58 @@ def webauthn_login_begin():
 def webauthn_login_complete():
     if 'webauthn_auth_state' not in session:
         return jsonify({'error': 'No authentication in progress'}), 400
-    
-    state = session.pop('webauthn_auth_state')
-    
+    state_obj = session.pop('webauthn_auth_state')
+    state = state_obj['state']
     try:
-        # Decodificar los datos CBOR del cliente
-        data = cbor.loads(request.get_data())
-        
-        # Extraer credential_id de la respuesta
-        credential_id = websafe_encode(data['credentialId'])
-        
-        # Buscar la credencial en la base de datos
+        data = request.get_json(force=True)
+        credential_id_bytes = bytes(data['id'])  # array of ints
+        client_data = CollectedClientData(bytes(data['clientDataJSON']))
+        authenticator_data = bytes(data['authenticatorData'])
+        signature = bytes(data['signature'])
+        user_handle = bytes(data['userHandle']) if data.get('userHandle') else None
+        # Buscar credencial por credential_id (websafe codificado)
+        from fido2.utils import websafe_encode as _enc
+        lookup_id = _enc(credential_id_bytes)
         conn = get_db_connection()
-        cred_row = conn.execute(
-            'SELECT * FROM webauthn_credentials WHERE credential_id = ?',
-            (credential_id,)
-        ).fetchone()
-        
+        cred_row = conn.execute('SELECT * FROM webauthn_credentials WHERE credential_id = ?', (lookup_id,)).fetchone()
         if not cred_row:
-            conn.close()
-            return jsonify({'error': 'Credential not found'}), 404
-        
-        # Obtener el usuario
-        user = conn.execute(
-            'SELECT * FROM users WHERE id = ?',
-            (cred_row['user_id'],)
-        ).fetchone()
-        
+            conn.close(); return jsonify({'error': 'Credential not found'}), 404
+        user = conn.execute('SELECT * FROM users WHERE id = ?', (cred_row['user_id'],)).fetchone()
         if not user:
-            conn.close()
-            return jsonify({'error': 'User not found'}), 404
-        
-        # Verificar la credencial
-        public_key = cbor.loads(websafe_decode(cred_row['public_key']))
-        credential_data = type('obj', (object,), {
-            'credential_id': websafe_decode(credential_id),
-            'public_key': public_key
-        })()
-        
-        fido2_server.authenticate_complete(state, [credential_data], data)
-        
-        # Autenticación exitosa - establecer sesión
+            conn.close(); return jsonify({'error': 'User not found'}), 404
+
+        descriptor = PublicKeyCredentialDescriptor(id=websafe_decode(cred_row['credential_id']), type='public-key')
+        auth_data_obj = AuthenticatorData(authenticator_data)
+
+        result = fido2_server.authenticate_complete(
+            state,
+            [descriptor],
+            credential_id_bytes,
+            client_data,
+            auth_data_obj,
+            signature
+        )
+        # Detección básica de replay: sign_count no incrementa
+        try:
+            prev = cred_row['sign_count'] if cred_row['sign_count'] is not None else 0
+            newc = getattr(auth_data_obj, 'sign_count', None)
+            if newc is not None and newc != 0:
+                if newc <= prev:
+                    log_alert(user['id'], 'webauthn_replay_suspect', f'cred {cred_row["id"]} new={newc} prev={prev}')
+                else:
+                    conn.execute('UPDATE webauthn_credentials SET sign_count=? WHERE id=?', (newc, cred_row['id']))
+                    conn.commit()
+        except Exception:
+            pass
         session['user_id'] = user['id']
         session['username'] = user['username']
         session['role'] = get_role_name(user['role_id'])
-        
+        try:
+            session['session_version'] = conn.execute('SELECT session_version FROM users WHERE id=?', (user['id'],)).fetchone()['session_version']
+        except Exception:
+            pass
         conn.close()
-        
         return jsonify({'status': 'ok', 'redirect': '/dashboard'})
-        
     except Exception as e:
         print(f"WebAuthn login complete error: {e}")
         return jsonify({'error': 'Authentication failed'}), 400

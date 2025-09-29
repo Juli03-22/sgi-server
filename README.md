@@ -1,24 +1,31 @@
 # SGI Server - Identity and Access Management System (IAM)
 
-A complete authentication and user management system with support for multi-factor authentication (MFA) and WebAuthn/FIDO2 physical keys.
+A complete authentication and user management system with strong security controls: multi-factor authentication (MFA), WebAuthn/FIDO2 physical keys, administrative approval workflow, role-based access, forced password rotation, session invalidation, and replay detection alerts.
 
 ## 🚀 Features
 
 ### Authentication and Security
-- ✅ **Traditional login system** with username and password
-- ✅ **Two-factor authentication (2FA)** with TOTP codes
-- ✅ **Physical key support** WebAuthn/FIDO2 (YubiKey, etc.)
-- ✅ **Role management** (user, administrator, root)
-- ✅ **User approval system** for new registrations
-- ✅ **Access auditing** with encrypted logs
-- ✅ **Time-based access control**
+- ✅ **Traditional login** (username + password)
+- ✅ **Two-factor authentication (TOTP)** with QR provisioning
+- ✅ **Physical security keys** WebAuthn/FIDO2 (YubiKey, etc.)
+- ✅ **Role management** (user / administrator / root)
+- ✅ **Administrative approval** for new registrations
+- ✅ **Encrypted audit log** (hashed rows with IP & User-Agent metadata)
+- ✅ **Time-based access control** (allowed hour window)
+- ✅ **Forced password change** after admin reset (`must_change_password` flag)
+- ✅ **Session invalidation** on role/password reset (`session_version` counter)
+- ✅ **Secure role change workflow** (MFA challenge + last-root protection)
+- ✅ **WebAuthn replay suspicion detection** (sign_count monitoring + alert)
+- ✅ **Security alerts** table (out-of-hours & replay)
 
 ### User Management
-- 👥 **Complete administration panel**
+- 👥 **Administration panel** (approve / delete / reset / manage roles)
+- 🛠️ **Reset password with forced rotation flow**
+- 🔄 **Role change with TOTP validation (admin/root)**
 - 📝 **Personal data registration** (names, surnames, date of birth)
 - 🔐 **Secure password generator**
-- 🔄 **2FA code regeneration**
-- 🗝️ **WebAuthn physical key management**
+- 🔄 **2FA secret regeneration**
+- 🗝️ **WebAuthn key enrollment & listing**
 
 ### User Interface
 - 🌐 **Responsive web interface** with Tailwind CSS
@@ -129,6 +136,24 @@ The server will be available at: `http://127.0.0.1:5000`
 2. Enter 2FA code if enabled
 3. Alternatively, use WebAuthn physical key
 
+If your password was reset by an administrator, you'll be redirected to a forced password change page before accessing any dashboard.
+
+### Forced Password Change Flow
+1. Admin triggers password reset → temporary random password is generated.
+2. User logs in with temporary password.
+3. System flags `must_change_password=1` and redirects to `/force_change_password`.
+4. User submits old (temporary) password + new compliant password (policy enforced server-side).
+5. On success: `must_change_password` cleared, normal session resumes.
+
+### Role Change Workflow (Admin / Root)
+1. Admin/root visits role change form.
+2. Selects target role and provides THEIR OWN TOTP code (not target's).
+3. Server validates constraints:
+    - Cannot change own role.
+    - Only root may alter another root.
+    - Last remaining root cannot be demoted.
+4. On success: user role updated, `session_version` increments (logs out other active sessions), audit logged.
+
 ### Physical Key Management
 1. Go to `/webauthn/register` (after logging in)
 2. Click "Register key"
@@ -174,7 +199,7 @@ sgi-server/
     └── src/
 ```
 
-## � Docker Configuration
+## 🐳 Docker Configuration
 
 ### Environment Variables
 The Docker container supports the following environment variables:
@@ -213,7 +238,7 @@ For production deployment, consider:
 - Using a proper database (PostgreSQL, MySQL)
 - Implementing container orchestration (Docker Swarm, Kubernetes)
 
-## �🔧 Advanced Configuration
+## 🔧 Advanced Configuration
 
 ### Database
 The system automatically initializes the necessary tables:
@@ -223,11 +248,20 @@ The system automatically initializes the necessary tables:
 - `audit_log` - Encrypted audit logs
 - `alerts` - Security alerts
 
+Additional runtime auto-migration (idempotent) adds security columns:
+- `users.must_change_password` (INTEGER 0/1) – forces password rotation after an admin reset.
+- `users.session_version` (INTEGER) – increments on role or password reset; invalidates existing sessions.
+
 ### Security
-- Passwords are stored with bcrypt hash
-- Audit logs are encrypted
+- Passwords hashed with bcrypt
+- Audit log entries hashed (with contextual IP / User-Agent) to deter tampering
 - WebAuthn uses public key cryptography
-- Origin validation to prevent CSRF attacks
+- Origin / RP ID validation to prevent CSRF / origin spoofing
+- Forced password rotation workflow enforced centrally
+- Session version validation rejects stale sessions (user re-login required)
+- WebAuthn `sign_count` replay suspicion generates alert (`webauthn_replay_suspect`)
+- MFA required for admin/root role changes (admin authenticates themselves, not target)
+- Protection against: last root removal, self role change, unauthorized root modifications
 
 ### Customization
 - Modify `texts` in `app.py` to change languages
@@ -248,6 +282,22 @@ The system automatically initializes the necessary tables:
 - Verify that the browser supports WebAuthn
 - Try in updated Chrome/Firefox
 - Check that the key is properly connected
+
+### "Sesión invalidada" / Session invalidated
+Cause: Your role or password changed, or an admin reset your account. Log in again—this is a security measure (`session_version` mismatch).
+
+### WebAuthn replay suspect alert
+If a credential's `sign_count` does not increase between authentications, an alert row is created. Access is still granted (to reduce false positives) but administrators should review and potentially revoke the credential if repeated.
+
+## 🧪 Recommended Hardening (Production)
+- Enforce HTTPS (TLS) via reverse proxy (nginx / Caddy)
+- Set cookies: `SESSION_COOKIE_SECURE=True`, `SESSION_COOKIE_SAMESITE='Strict'`
+- Add rate limiting (e.g. Flask-Limiter) to login, WebAuthn, role change, password reset
+- Migrate from SQLite to PostgreSQL for integrity & concurrency
+- Externalize and rotate secrets (env vars / secret manager)
+- Centralize audit & alerts to SIEM (Elastic / Splunk)
+- Add CSP & security headers (Flask-Talisman or custom middleware)
+- Consider WebAuthn-only elevation for sensitive admin actions
 
 ## 📝 Contributing
 

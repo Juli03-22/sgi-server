@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="flex flex-1 items-center justify-center p-4 min-h-screen bg-gray-50 dark:bg-gray-900">
+  <div class="w-full max-w-lg bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 space-y-6">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4">{{ get_text('change_role') }}: <span class="text-blue-600">{{ target_user['username'] }}</span></h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="p-3 rounded mb-2 text-sm {{ 'bg-green-100 text-green-700' if category == 'success' else 'bg-yellow-100 text-yellow-700' if category == 'warning' else 'bg-red-100 text-red-700' }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="POST" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium mb-1" for="new_role_id">{{ get_text('new_role') }}</label>
+        <select id="new_role_id" name="new_role_id" class="w-full border rounded px-3 py-2 bg-gray-50 dark:bg-gray-700 dark:text-gray-100">
+          {% for r in roles %}
+            <option value="{{ r['id'] }}" {% if r['id'] == target_user['role_id'] %}selected{% endif %}>{{ r['name'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        {% if admin_has_mfa %}
+          <label class="block text-sm font-medium mb-1" for="mfa_code">{{ get_text('admin_mfa_code') }}</label>
+          <input id="mfa_code" name="mfa_code" type="text" maxlength="6" pattern="[0-9]{6}" required class="w-full border rounded px-3 py-2 bg-gray-50 dark:bg-gray-700 dark:text-gray-100" placeholder="123456" />
+        {% else %}
+          <div class="text-red-600 text-sm">{{ get_text('mfa_required_role_change') }}</div>
+        {% endif %}
+      </div>
+      <div class="flex items-center justify-between">
+        <a href="{{ url_for('admin_users') }}" class="text-sm text-gray-500 hover:text-gray-700">&larr; Volver</a>
+        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50" {% if not admin_has_mfa %}disabled{% endif %}>{{ get_text('change_role') }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
