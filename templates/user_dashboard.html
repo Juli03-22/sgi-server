@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex flex-1 items-center justify-center p-4 min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div class="w-full max-w-2xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 space-y-6">
+        <div class="flex flex-col sm:flex-row sm:justify-between items-center mb-6">
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">Bienvenido, {{ username }}!</h1>
+            <nav class="flex gap-4 mt-4 sm:mt-0">
+                <a href="/register" class="text-blue-600 hover:text-blue-800 font-medium">Registrar Usuario</a>
+                <a href="/setlang/{{ 'en' if session.get('lang', 'es') == 'es' else 'es' }}" class="text-xs text-gray-500 hover:text-gray-700">Cambiar idioma</a>
+                <a href="{{ url_for('auth.logout') }}" class="text-red-600 hover:text-red-800 font-medium">Cerrar sesión</a>
+            </nav>
+        </div>
+        <section>
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Tu Perfil</h2>
+            <p class="text-gray-600 dark:text-gray-300 mb-2">Usuario: {{ username }}</p>
+            <p class="text-gray-600 dark:text-gray-300 mb-4">Rol: {{ role }}</p>
+        </section>
+        <section>
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Tus Actividades</h2>
+            <p class="text-gray-600 dark:text-gray-300 mb-4">Aquí puedes ver tus actividades y actualizaciones recientes.</p>
+            <!-- Contenido adicional para el usuario -->
+        </section>
+    </div>
+</div>
+{% endblock %}

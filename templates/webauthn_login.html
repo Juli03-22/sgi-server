@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex flex-1 items-center justify-center p-4 min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 space-y-6">
+        <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100 text-center mb-4">Autenticación con llave física (Yubikey/WebAuthn)</h2>
+        <div id="status" class="mb-4 text-center text-sm text-gray-600 dark:text-gray-300"></div>
+        <button id="login-btn" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-500 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition duration-150 ease-in-out">Autenticar con llave</button>
+        <div class="mt-4 text-center">
+            <a href="/login" class="text-sm text-blue-600 hover:text-blue-700 font-medium">Volver al login</a>
+        </div>
+    </div>
+</div>
+<script>
+async function bufferDecode(value) {
+    return Uint8Array.from(atob(value), c => c.charCodeAt(0));
+}
+function bufferEncode(value) {
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(value)));
+}
+document.getElementById('login-btn').onclick = async function() {
+    document.getElementById('status').innerText = 'Conectando con tu llave física...';
+    // Iniciar autenticación
+    let resp = await fetch('/webauthn/auth/begin', {method: 'POST'});
+    let options = await resp.arrayBuffer();
+    options = CBOR.decode(options);
+    options.challenge = new Uint8Array(options.challenge);
+    if (options.allowCredentials) {
+        options.allowCredentials = options.allowCredentials.map(c => ({...c, id: new Uint8Array(c.id)}));
+    }
+    let assertion;
+    try {
+        assertion = await navigator.credentials.get({publicKey: options});
+    } catch (e) {
+        document.getElementById('status').innerText = 'Error: ' + e;
+        return;
+    }
+    // Completar autenticación
+    let data = {
+        credentialId: new Uint8Array(assertion.rawId),
+        clientDataJSON: new Uint8Array(assertion.response.clientDataJSON),
+        authenticatorData: new Uint8Array(assertion.response.authenticatorData),
+        signature: new Uint8Array(assertion.response.signature),
+        userHandle: assertion.response.userHandle ? new Uint8Array(assertion.response.userHandle) : null
+    };
+    let complete = await fetch('/webauthn/auth/complete', {
+        method: 'POST',
+        body: CBOR.encode(data)
+    });
+    if (complete.ok) {
+        document.getElementById('status').innerText = '¡Autenticación exitosa! Redirigiendo...';
+        setTimeout(() => window.location = '/dashboard', 1000);
+    } else {
+        document.getElementById('status').innerText = 'Error al autenticar con la llave.';
+    }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.js"></script>
+{% endblock %}

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}SGI IAM{% endblock %}</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --color-primary: 34 197 94;
+        }
+        .dark {
+            --color-primary: 22 163 74;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background-color: rgb(var(--color-primary)); border-radius: 4px; }
+        .dark ::-webkit-scrollbar-thumb { background-color: rgba(var(--color-primary), 0.5); }
+        .dark .bg-white { background-color: #111827; }
+        .dark .text-gray-900 { color: #f3f4f6; }
+        .dark .border-gray-200 { border-color: #374151; }
+        .dark .text-gray-500 { color: #9ca3af; }
+    </style>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: 'rgb(var(--color-primary) / <alpha-value>)',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 transition-colors duration-300 min-h-screen">
+    <div class="w-full flex justify-end p-2">
+        <form method="post" action="{{ url_for('setlang', lang='es' if session.get('lang', 'es') == 'en' else 'en') }}">
+            <button type="submit" class="px-3 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-xs font-semibold">
+                {{ 'Switch to English' if session.get('lang', 'es') == 'es' else 'Cambiar a español' }}
+            </button>
+        </form>
+    </div>
+    {% block content %}{% endblock %}
+</body>
+</html>

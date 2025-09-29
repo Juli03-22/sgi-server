@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex flex-1 items-center justify-center p-4 min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 space-y-6">
+        <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100 text-center mb-4">Registrar llave física (Yubikey/WebAuthn)</h2>
+        <div id="status" class="mb-4 text-center text-sm text-gray-600 dark:text-gray-300"></div>
+        <button id="register-btn" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-500 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 ease-in-out">Registrar llave</button>
+        <div class="mt-4 text-center">
+            <a href="/dashboard" class="text-sm text-green-600 hover:text-green-700 font-medium">Volver al dashboard</a>
+        </div>
+    </div>
+</div>
+<script>
+document.getElementById('register-btn').onclick = async function() {
+    document.getElementById('status').innerText = 'Conectando con tu llave física...';
+    // Iniciar registro
+    let resp = await fetch('/webauthn/register/begin', {method: 'POST'});
+    let options = await resp.json();
+    
+    // Convertir arrays de números a Uint8Array
+    options.challenge = new Uint8Array(options.challenge);
+    options.user.id = new Uint8Array(options.user.id);
+    
+    let cred;
+    try {
+        cred = await navigator.credentials.create({publicKey: options});
+    } catch (e) {
+        document.getElementById('status').innerText = 'Error: ' + e;
+        return;
+    }
+    // Completar registro - enviar como JSON
+    let data = {
+        clientDataJSON: Array.from(new Uint8Array(cred.response.clientDataJSON)),
+        attestationObject: Array.from(new Uint8Array(cred.response.attestationObject)),
+        transports: cred.response.getTransports ? cred.response.getTransports() : []
+    };
+    let complete = await fetch('/webauthn/register/complete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    });
+    if (complete.ok) {
+        document.getElementById('status').innerText = '¡Llave registrada con éxito!';
+    } else {
+        document.getElementById('status').innerText = 'Error al registrar la llave.';
+    }
+};
+</script>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex flex-1 items-center justify-center p-4 min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 space-y-6">
+        <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 text-center mb-4">Registro de Nuevo Usuario</h2>
+        <form method="POST" action="{{ url_for('register') }}" class="space-y-5">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="p-3 rounded bg-red-100 text-red-700 text-sm">{{ message }}</div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+            <div>
+                <label for="username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Usuario</label>
+                <input type="text" id="username" name="username" required autocomplete="username"
+                    class="block w-full rounded-lg border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 py-2 pl-3 pr-4 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-green-500 focus:border-green-500 sm:text-sm transition duration-150"
+                    placeholder="Usuario">
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Contraseña</label>
+                    <input type="password" id="password" name="password" required autocomplete="new-password"
+                        class="block w-full rounded-lg border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 py-2 pl-3 pr-4 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-green-500 focus:border-green-500 sm:text-sm transition duration-150"
+                        placeholder="Contraseña">
+                </div>
+                <div>
+                    <label for="password2" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Repetir Contraseña</label>
+                    <input type="password" id="password2" name="password2" required autocomplete="new-password"
+                        class="block w-full rounded-lg border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 py-2 pl-3 pr-4 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-green-500 focus:border-green-500 sm:text-sm transition duration-150"
+                        placeholder="Repetir Contraseña">
+                </div>
+            </div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+                La contraseña debe tener al menos 16 caracteres, mayúsculas, minúsculas, números y símbolos.
+            </div>
+            <button type="submit"
+                class="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-500 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 ease-in-out">
+                Registrar
+            </button>
+        </form>
+        <div class="flex flex-col items-center space-y-2 mt-4">
+            <a href="/" class="text-sm text-green-600 hover:text-green-700 font-medium">¿Ya tienes cuenta? Inicia sesión</a>
+            <a href="/setlang/{{ 'en' if session.get('lang', 'es') == 'es' else 'es' }}" class="text-xs text-gray-500 hover:text-gray-700">Cambiar idioma</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

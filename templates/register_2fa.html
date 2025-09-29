@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex flex-1 items-center justify-center p-4 min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 space-y-6">
+        <div class="flex flex-col items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 text-green-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0-1.104.896-2 2-2s2 .896 2 2-.896 2-2 2-2-.896-2-2zm0 0V7m0 4v4m0 0h4m-4 0H8" /></svg>
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Verificación 2FA</h1>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Escanea el código QR con tu app de autenticación o ingresa el código generado</p>
+        </div>
+        <div class="flex flex-col items-center space-y-4">
+            <img src="data:image/png;base64,{{ qr_b64 }}" alt="QR 2FA" class="w-40 h-40 border-4 border-green-200 rounded-lg shadow">
+            <form method="POST" action="{{ url_for('register_2fa') }}" class="space-y-4 w-full">
+                <label for="code" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Código 2FA</label>
+                <input type="text" id="code" name="code" autocomplete="one-time-code" required
+                    class="block w-full rounded-lg border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 py-2 pl-3 pr-4 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-green-500 focus:border-green-500 sm:text-sm transition duration-150"
+                    placeholder="Ingresa el código de tu app">
+                {% if yubikey_supported %}
+                <div class="mt-4">
+                    <label for="yubikey" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">O usa tu Yubikey</label>
+                    <input type="text" id="yubikey" name="yubikey" autocomplete="off"
+                        class="block w-full rounded-lg border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 py-2 pl-3 pr-4 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition duration-150"
+                        placeholder="Toca tu Yubikey aquí (experimental)">
+                </div>
+                {% endif %}
+                {% if msg %}
+                <div class="p-3 rounded bg-red-100 text-red-700 text-sm">{{ msg }}</div>
+                {% endif %}
+                <button type="submit"
+                    class="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-500 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 ease-in-out">
+                    Verificar y crear cuenta
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
